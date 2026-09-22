@@ -64,3 +64,38 @@ function findJavaFiles(repoRoot) {
   walk(repoRoot);
   return results;
 }
+
+// ---------------------------------------------------------------------
+// 2. Java source parsing
+//    feat: parse Java source files
+// ---------------------------------------------------------------------
+
+const PACKAGE_RE = /^\s*package\s+([\w.]+)\s*;/m;
+const IMPORT_RE = /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
+// First public (or package-private) top-level type declaration in the file.
+const TYPE_RE = /\b(?:public\s+)?(?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+(\w+)/;
+
+/**
+ * Parses one Java file into a lightweight structural model:
+ *   { package, className, imports, rawSource }
+ * This is intentionally not a full AST — Phase 1 only needs package,
+ * primary type name, and import list to build the dependency graph.
+ */
+function parseJavaFile(absPath) {
+  const source = fs.readFileSync(absPath, 'utf8');
+
+  const packageMatch = source.match(PACKAGE_RE);
+  const pkg = packageMatch ? packageMatch[1] : '';
+
+  const typeMatch = source.match(TYPE_RE);
+  const className = typeMatch ? typeMatch[1] : path.basename(absPath, '.java');
+
+  const imports = [];
+  let m;
+  IMPORT_RE.lastIndex = 0;
+  while ((m = IMPORT_RE.exec(source)) !== null) {
+    imports.push(m[1]);
+  }
+
+  return { package: pkg, className, imports, rawSource: source };
+}
