@@ -159,3 +159,47 @@ function extractRelationships(parsedByRelPath, fqcnIndex, simpleNameIndex) {
 
   return edges;
 }
+
+// ---------------------------------------------------------------------
+// 4. Dependency graph
+//    feat: build dependency graph
+// ---------------------------------------------------------------------
+
+/**
+ * Builds the dependency graph for a repository, matching the `graph`
+ * shape in docs/CONTRACT.md:
+ *   { nodes: [{id, className, package}], edges: [{from, to, kind}] }
+ *
+ * `id` on every node is the repo-relative, POSIX-style file path —
+ * this is also what the extension uses to open the file directly.
+ */
+function buildGraph(repoRoot) {
+  const absFiles = findJavaFiles(repoRoot);
+
+  const parsedByRelPath = new Map();
+  const fqcnIndex = new Map(); // "pkg.ClassName" -> relPath
+  const simpleNameIndex = new Map(); // "ClassName" -> [relPath, ...]
+
+  for (const absPath of absFiles) {
+    const relPath = toRepoRelativePosixPath(repoRoot, absPath);
+    const parsed = parseJavaFile(absPath);
+    parsedByRelPath.set(relPath, parsed);
+
+    const fqcn = parsed.package ? `${parsed.package}.${parsed.className}` : parsed.className;
+    fqcnIndex.set(fqcn, relPath);
+
+    if (!simpleNameIndex.has(parsed.className)) simpleNameIndex.set(parsed.className, []);
+    simpleNameIndex.get(parsed.className).push(relPath);
+  }
+
+  const nodes = [];
+  for (const [relPath, parsed] of parsedByRelPath.entries()) {
+    nodes.push({ id: relPath, className: parsed.className, package: parsed.package });
+  }
+  // Stable, deterministic ordering makes output diffable in tests/CI.
+  nodes.sort((a, b) => a.id.localeCompare(b.id));
+
+  const edges = extractRelationships(parsedByRelPath, fqcnIndex, simpleNameIndex);
+
+  return { nodes, edges };
+}
