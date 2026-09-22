@@ -3,14 +3,24 @@
   "displayName": "Kairos — Code Impact",
   "description": "Understand an unfamiliar Java codebase and see the potential ripple effects of changing a file.",
   "version": "0.0.1",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Other"],
-  "activationEvents": [],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "kairos.analyzeCodebase", "title": "Code Impact: Analyze Codebase" },
-      { "command": "kairos.showImpact", "title": "Code Impact: Show Impact" }
+      {
+        "command": "kairos.analyzeCodebase",
+        "title": "Code Impact: Analyze Codebase"
+      },
+      {
+        "command": "kairos.showImpact",
+        "title": "Code Impact: Show Impact"
+      }
     ]
   },
   "scripts": {
@@ -21,11 +31,12 @@
     "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
-    "@types/node": "^20.0.0",
     "@types/mocha": "^10.0.0",
-    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^2.3.9",
-    "mocha": "^10.4.0"
+    "glob": "^13.0.6",
+    "mocha": "^10.4.0",
+    "typescript": "^5.4.0"
   }
 }
