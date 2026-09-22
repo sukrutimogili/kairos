@@ -1,10 +1,18 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { getImpactData } from '../data/getImpactData';
-import { isImpactError } from '../types';
+import { getImpactData } from '../../data/getImpactData';
+import { isImpactError } from '../../types';
+
+async function activateExtension() {
+  const ext = vscode.extensions.all.find((e) => e.packageJSON.name === 'kairos');
+  if (ext && !ext.isActive) {
+    await ext.activate();
+  }
+}
 
 suite('Kairos Extension', () => {
   test('commands are registered', async () => {
+    await activateExtension();
     const commands = await vscode.commands.getCommands(true);
     assert.ok(commands.includes('kairos.analyzeCodebase'));
     assert.ok(commands.includes('kairos.showImpact'));
