@@ -99,3 +99,63 @@ function parseJavaFile(absPath) {
 
   return { package: pkg, className, imports, rawSource: source };
 }
+
+// ---------------------------------------------------------------------
+// 3. Relationship extraction
+//    feat: extract import relationships
+// ---------------------------------------------------------------------
+
+function toRepoRelativePosixPath(repoRoot, absPath) {
+  return path.relative(repoRoot, absPath).split(path.sep).join('/');
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Turns parsed imports/usages into (fromFile, toFile, kind) edges.
+ * Only relationships between files INSIDE the analyzed repo become
+ * edges — external/library imports (java.util.*, org.springframework.*,
+ * ...) are Phase 1 out of scope.
+ */
+function extractRelationships(parsedByRelPath, fqcnIndex, simpleNameIndex) {
+  const edgeKeySeen = new Set();
+  const edges = [];
+
+  function addEdge(fromRelPath, toRelPath, kind) {
+    if (fromRelPath === toRelPath) return; // no self-edges
+    const key = `${fromRelPath}=>${toRelPath}`;
+    if (edgeKeySeen.has(key)) return;
+    edgeKeySeen.add(key);
+    edges.push({ from: fromRelPath, to: toRelPath, kind });
+  }
+
+  for (const [relPath, parsed] of parsedByRelPath.entries()) {
+    // (a) Explicit imports that resolve to another file inside this repo.
+    for (const imp of parsed.imports) {
+      if (imp.endsWith('.*')) continue; // wildcard package import — ambiguous, skip
+      const targetRelPath = fqcnIndex.get(imp);
+      if (targetRelPath) {
+        addEdge(relPath, targetRelPath, 'import');
+      }
+    }
+
+    // (b) Same-package usage without an explicit import. Java doesn't
+    // require importing classes in your own package.
+    for (const [simpleName, candidateRelPaths] of simpleNameIndex.entries()) {
+      if (simpleName === parsed.className) continue;
+      const usageRe = new RegExp(`\\b${escapeRegExp(simpleName)}\\b`);
+      if (!usageRe.test(parsed.rawSource)) continue;
+
+      for (const candidateRelPath of candidateRelPaths) {
+        const candidate = parsedByRelPath.get(candidateRelPath);
+        if (candidate.package === parsed.package) {
+          addEdge(relPath, candidateRelPath, 'same-package-reference');
+        }
+      }
+    }
+  }
+
+  return edges;
+}
