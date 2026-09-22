@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "1.0",
+  "requestedFile": "src/main/java/com/example/service/UserService.java",
+  "graph": {
+    "nodes": [
+      { "id": "src/main/java/com/example/controller/UserController.java", "className": "UserController", "package": "com.example.controller" },
+      { "id": "src/main/java/com/example/service/UserService.java", "className": "UserService", "package": "com.example.service" },
+      { "id": "src/main/java/com/example/repository/UserRepository.java", "className": "UserRepository", "package": "com.example.repository" }
+    ],
+    "edges": [
+      { "from": "src/main/java/com/example/controller/UserController.java", "to": "src/main/java/com/example/service/UserService.java", "kind": "import" },
+      { "from": "src/main/java/com/example/service/UserService.java", "to": "src/main/java/com/example/repository/UserRepository.java", "kind": "import" }
+    ]
+  },
+  "impact": {
+    "dependsOn": ["src/main/java/com/example/repository/UserRepository.java"],
+    "dependents": ["src/main/java/com/example/controller/UserController.java"],
+    "affected": [
+      { "id": "src/main/java/com/example/controller/UserController.java", "relation": "dependent", "distance": 1 },
+      { "id": "src/main/java/com/example/repository/UserRepository.java", "relation": "dependency", "distance": 1 }
+    ]
+  },
+  "meta": { "language": "java", "fileCount": 3 }
+}
