@@ -203,3 +203,166 @@ function buildGraph(repoRoot) {
 
   return { nodes, edges };
 }
+
+// ---------------------------------------------------------------------
+// 5. Impact analysis
+//    feat: add impact analysis
+// ---------------------------------------------------------------------
+
+/**
+ * Given a graph and a requested file (repo-relative path), computes:
+ *   dependsOn  — direct successors of requestedFile (distance 1, forward)
+ *   dependents — direct predecessors of requestedFile (distance 1, backward)
+ *   affected   — every reachable node in either direction, each tagged
+ *                with { id, relation, distance }.
+ *
+ * Per docs/CONTRACT.md's design rules: dependsOn/dependents are exactly
+ * the distance-1 neighbors of requestedFile in graph.edges, so they can
+ * never drift from a fresh traversal — see analyze.test.js.
+ */
+function computeImpact(graph, requestedFile) {
+  const forwardAdj = new Map(); // file -> files it depends on
+  const backwardAdj = new Map(); // file -> files that depend on it
+
+  for (const node of graph.nodes) {
+    forwardAdj.set(node.id, []);
+    backwardAdj.set(node.id, []);
+  }
+  for (const edge of graph.edges) {
+    forwardAdj.get(edge.from).push(edge.to);
+    backwardAdj.get(edge.to).push(edge.from);
+  }
+
+  const dependsOn = [...(forwardAdj.get(requestedFile) || [])].sort();
+  const dependents = [...(backwardAdj.get(requestedFile) || [])].sort();
+
+  const affectedById = new Map(); // id -> {id, relation, distance}
+
+  function bfs(startId, adjacency, relation) {
+    const visited = new Set([startId]);
+    let frontier = [startId];
+    let distance = 0;
+    while (frontier.length > 0) {
+      distance += 1;
+      const nextFrontier = [];
+      for (const current of frontier) {
+        for (const neighbor of adjacency.get(current) || []) {
+          if (visited.has(neighbor)) continue;
+          visited.add(neighbor);
+          nextFrontier.push(neighbor);
+
+          const existing = affectedById.get(neighbor);
+          if (!existing || existing.distance > distance) {
+            affectedById.set(neighbor, { id: neighbor, relation, distance });
+          }
+        }
+      }
+      frontier = nextFrontier;
+    }
+  }
+
+  bfs(requestedFile, forwardAdj, 'dependency'); // things requestedFile depends on
+  bfs(requestedFile, backwardAdj, 'dependent'); // things that depend on requestedFile
+
+  const affected = [...affectedById.values()].sort(
+    (a, b) => a.distance - b.distance || a.id.localeCompare(b.id)
+  );
+
+  return { dependsOn, dependents, affected };
+}
+
+// ---------------------------------------------------------------------
+// Top-level entry point — matches docs/CONTRACT.md response/error shape
+// ---------------------------------------------------------------------
+
+/**
+ * @param {string} repositoryRoot - path to the repo to analyze
+ * @param {string} requestedFile  - path to the target file (absolute, or
+ *   relative to repositoryRoot, or relative to cwd)
+ * @returns {object} JSON matching docs/CONTRACT.md exactly (success or error)
+ */
+function analyze(repositoryRoot, requestedFile) {
+  const repoRoot = path.resolve(repositoryRoot);
+
+  if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      error: { code: 'ANALYSIS_FAILED', message: `repositoryRoot does not exist: ${repositoryRoot}` },
+    };
+  }
+
+  const graph = buildGraph(repoRoot);
+
+  const requestedRelPath = resolveRequestedFile(repoRoot, requestedFile, graph.nodes);
+  if (!requestedRelPath) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      error: { code: 'FILE_NOT_FOUND', message: 'requestedFile was not found in the analyzed repository' },
+    };
+  }
+
+  const impact = computeImpact(graph, requestedRelPath);
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    requestedFile: requestedRelPath,
+    graph,
+    impact,
+    meta: {
+      language: 'java',
+      fileCount: graph.nodes.length,
+    },
+  };
+}
+
+/**
+ * Accepts requestedFile as absolute, repo-relative, or cwd-relative, and
+ * resolves it to the exact repo-relative POSIX id used in graph.nodes.
+ */
+function resolveRequestedFile(repoRoot, requestedFile, nodes) {
+  const candidates = [
+    requestedFile,
+    path.resolve(repoRoot, requestedFile),
+    path.resolve(process.cwd(), requestedFile),
+  ];
+
+  for (const candidate of candidates) {
+    const absCandidate = path.isAbsolute(candidate) ? candidate : path.resolve(candidate);
+    const relPosix = toRepoRelativePosixPath(repoRoot, absCandidate);
+    if (nodes.some((n) => n.id === relPosix)) return relPosix;
+  }
+
+  const directMatch = nodes.find((n) => n.id === requestedFile.split(path.sep).join('/'));
+  return directMatch ? directMatch.id : null;
+}
+
+// ---------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------
+
+function main() {
+  const [, , repoRootArg, requestedFileArg] = process.argv;
+
+  if (!repoRootArg || !requestedFileArg) {
+    console.error('Usage: node analyze.js <repositoryRoot> <requestedFile>');
+    process.exitCode = 1;
+    return;
+  }
+
+  const result = analyze(repoRootArg, requestedFileArg);
+  console.log(JSON.stringify(result, null, 2));
+
+  if (result.error) process.exitCode = 1;
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  findJavaFiles,
+  parseJavaFile,
+  buildGraph,
+  computeImpact,
+  analyze,
+};
