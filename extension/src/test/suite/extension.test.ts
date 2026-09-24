@@ -18,8 +18,12 @@ suite('Kairos Extension', () => {
     assert.ok(commands.includes('kairos.showImpact'));
   });
 
-  test('getImpactData returns mock data matching contract shape', async () => {
-    const result = await getImpactData('/fake/repo', 'src/main/java/com/example/service/UserService.java');
+  test('getImpactData returns real analyzer data matching contract shape', async () => {
+    // Stage 3: getImpactData no longer reads mock JSON, so this must point
+    // at a real repo the analyzer can walk — the Stage 1 sample fixture.
+    const path = require('path');
+    const sampleRepo = path.resolve(__dirname, '../../../../tests/fixtures/sample-project');
+    const result = await getImpactData(sampleRepo, 'src/main/java/com/example/service/UserService.java');
     assert.ok(!isImpactError(result));
     if (!isImpactError(result)) {
       assert.strictEqual(result.schemaVersion, '1.0');
