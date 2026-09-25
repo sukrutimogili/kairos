@@ -9,6 +9,15 @@ export class ImpactPanel {
   private constructor(panel: vscode.WebviewPanel) {
     this.panel = panel;
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.webview.onDidReceiveMessage(
+      (msg) => {
+        if (msg?.type === 'openFile' && typeof msg.path === 'string') {
+          openRepoFile(msg.path);
+        }
+      },
+      null,
+      this.disposables
+    );
   }
 
   public static show(result: ImpactResult) {
@@ -19,7 +28,7 @@ export class ImpactPanel {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      'kairosImpact', 'Code Impact', column ?? vscode.ViewColumn.Beside, { enableScripts: false }
+      'kairosImpact', 'Code Impact', column ?? vscode.ViewColumn.Beside, { enableScripts: true }
     );
     ImpactPanel.currentPanel = new ImpactPanel(panel);
     ImpactPanel.currentPanel.update(result);
@@ -37,14 +46,11 @@ export class ImpactPanel {
 
 // =============================================================================
 // KAIROS-EDITORIAL-UI
-// Swiss / editorial presentation layer. Presentation only: these functions turn
-// an ImpactResult into static HTML. They perform no analysis, open no files and
-// send or receive no messages, so the ImpactPanel lifecycle above and the data
-// contract (docs/CONTRACT.md) are unaffected.
+// Swiss / editorial presentation layer. These functions turn an ImpactResult
+// into HTML for the webview, including a tiny inline script for click-to-open.
 // =============================================================================
 
-// Scripts are disabled for this panel, so the page needs nothing but inline CSS.
-const CSP = "default-src 'none'; style-src 'unsafe-inline';";
+const CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';";
 
 const STYLES = `
   :root {
@@ -76,7 +82,6 @@ const STYLES = `
     padding: 2rem 2.5rem 6rem 2.5rem;
   }
 
-  /* Scaled up by 5% */
   .hero-title {
     font-size: clamp(3.65rem, 6.3vw, 4.45rem);
     font-weight: 700;
@@ -97,7 +102,6 @@ const STYLES = `
     overflow-wrap: anywhere;
   }
 
-  /* Watermark moved to background layer (pointer-events none + lower opacity) */
   .watermark-bottom {
     position: fixed;
     bottom: -1.5rem;
@@ -114,10 +118,10 @@ const STYLES = `
     opacity: 0.18;
   }
 
-  .content-wrapper { 
-    position: relative; 
-    z-index: 2; 
-    max-width: 1050px; 
+  .content-wrapper {
+    position: relative;
+    z-index: 2;
+    max-width: 1050px;
   }
 
   .section-label {
@@ -225,7 +229,6 @@ const STYLES = `
 
   .error-message { font-size: 1rem; line-height: 1.5; max-width: 70ch; overflow-wrap: anywhere; }
 
-  /* Topology Graph Card */
   .graph-card {
     margin-top: 1.25rem;
     border: 1px solid var(--border);
@@ -251,6 +254,9 @@ const STYLES = `
 
   .graph-edge { stroke: var(--edge); stroke-width: 2; stroke-dasharray: 4; fill: none; }
   .graph-edge.active { stroke: var(--accent); stroke-dasharray: none; }
+  .graph-edge-import { stroke: var(--edge); }
+  .graph-edge-same-package-reference { stroke: #5a5a68; stroke-dasharray: 2 3; }
+  .graph-edge-historical { stroke: #9b6bff; stroke-dasharray: 6 3; }
   .arrow-head { fill: var(--node-stroke); }
   .arrow-head.active { fill: var(--accent); }
 
@@ -300,11 +306,22 @@ function page(title: string, body: string, watermark: string): string {
 <body>
   <div class="content-wrapper">${body}</div>
   <div class="watermark-bottom" aria-hidden="true">_${escapeHtml(watermark)}</div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    function openNode(id) { vscode.postMessage({ type: 'openFile', path: id }); }
+  </script>
 </body>
 </html>`;
 }
 
-function renderError(result: ImpactErrorResponse): string {
+const ERROR_HINTS: Record<string, string> = {
+  FILE_NOT_FOUND: 'Make sure the active file is inside the opened workspace folder, and that it was picked up by the analyzer.',
+  UNSUPPORTED_LANGUAGE: 'Kairos doesn\u2019t support this file type yet. Select a supported source file and try again.',
+  ANALYSIS_FAILED: 'Something went wrong while analyzing the repository. Check the file path and try again.',
+};
+
+export function renderError(result: ImpactErrorResponse): string {
+  const hint = ERROR_HINTS[result.error.code];
   const body = `
     <div class="hero-title">kairos-</div>
     <div class="sub-tag">impact :: could not analyze</div>
@@ -312,12 +329,13 @@ function renderError(result: ImpactErrorResponse): string {
       <div>
         <div class="section-label">${escapeHtml(result.error.code)}</div>
         <p class="error-message">${escapeHtml(result.error.message)}</p>
+        ${hint ? `<p class="disclaimer-note">${escapeHtml(hint)}</p>` : ''}
       </div>
     </div>`;
   return page('error', body, 'error');
 }
 
-function renderImpact(result: ImpactResponse): string {
+export function renderImpact(result: ImpactResponse): string {
   const { requestedFile, impact } = result;
 
   const fileList = (items: string[]) =>
@@ -375,12 +393,7 @@ function renderImpact(result: ImpactResponse): string {
   return page('impact', body, 'impact');
 }
 
-// Layered layout: the target sits in the middle column; files that depend on it
-// are laid out to its left (by distance), files it depends on to its right.
-// Only the target's impact neighbourhood is drawn. graph.nodes / graph.edges
-// describe the whole analyzed repository, so anything outside `affected` is
-// deliberately left off the canvas (the table above still lists every affected file).
-function renderGraph(result: ImpactResponse): string {
+export function renderGraph(result: ImpactResponse): string {
   const { graph, impact, requestedFile } = result;
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
 
@@ -433,15 +446,16 @@ function renderGraph(result: ImpactResponse): string {
     const ux = dx / len;
     const uy = dy / len;
     const active = e.from === requestedFile || e.to === requestedFile;
+    const kindClass = `graph-edge-${e.kind.replace(/[^a-z0-9-]/gi, '-')}`;
     return [
-      `<line class="graph-edge${active ? ' active' : ''}" x1="${fmt(a.x + ux * (a.r + GAP_START))}" y1="${fmt(a.y + uy * (a.r + GAP_START))}" x2="${fmt(b.x - ux * (b.r + GAP_END))}" y2="${fmt(b.y - uy * (b.r + GAP_END))}" marker-end="url(#${active ? 'kairos-arrow-active' : 'kairos-arrow'})" />`,
+      `<line class="graph-edge ${kindClass}${active ? ' active' : ''}" x1="${fmt(a.x + ux * (a.r + GAP_START))}" y1="${fmt(a.y + uy * (a.r + GAP_START))}" x2="${fmt(b.x - ux * (b.r + GAP_END))}" y2="${fmt(b.y - uy * (b.r + GAP_END))}" marker-end="url(#${active ? 'kairos-arrow-active' : 'kairos-arrow'})" />`,
     ];
   });
 
   const nodeMarkup = [...placed]
     .map(([id, p]) => {
       const label = nodeById.get(id)?.className ?? shortName(id).replace(/\.java$/, '');
-      return `<g class="node-group${id === requestedFile ? ' root' : ''}" transform="translate(${fmt(p.x)}, ${fmt(p.y)})">
+      return `<g class="node-group${id === requestedFile ? ' root' : ''}" transform="translate(${fmt(p.x)}, ${fmt(p.y)})" style="cursor:pointer" onclick="openNode('${escapeJsString(id)}')">
           <title>${escapeHtml(id)}</title>
           <circle class="node-circle" r="${p.r}" />
           <text class="node-label" y="${p.r + 20}">${escapeHtml(truncate(label, 24))}</text>
@@ -476,4 +490,18 @@ function truncate(s: string, max: number): string { return s.length > max ? s.sl
 function shortName(path: string): string { return path.split('/').pop() ?? path; }
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function escapeJsString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+async function openRepoFile(relPath: string): Promise<void> {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!root) return;
+  const uri = vscode.Uri.joinPath(root, relPath);
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preserveFocus: false });
+  } catch {
+    vscode.window.showWarningMessage(`Kairos: could not open ${relPath}`);
+  }
 }
