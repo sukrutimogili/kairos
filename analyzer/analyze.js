@@ -32,9 +32,10 @@ const SCHEMA_VERSION = '1.0';
 // ---------------------------------------------------------------------
 
 const javaPlugin = require('./languages/java');
+const typescriptPlugin = require('./languages/typescript');
 
 // extension -> plugin. Add new plugins here (or make this dynamic later).
-const LANGUAGE_PLUGINS = [javaPlugin];
+const LANGUAGE_PLUGINS = [javaPlugin, typescriptPlugin];
 
 const EXTENSION_TO_PLUGIN = new Map();
 for (const plugin of LANGUAGE_PLUGINS) {
@@ -218,6 +219,20 @@ function analyze(repositoryRoot, requestedFile) {
     };
   }
 
+  // Check the requested file's extension up front: if it's not a
+  // recognized language at all, that's UNSUPPORTED_LANGUAGE, distinct
+  // from FILE_NOT_FOUND (which means "no plugin recognizes this path
+  // inside the analyzed repo, even though the language is supported").
+  const requestedAbsGuess = path.isAbsolute(requestedFile)
+    ? requestedFile
+    : path.resolve(repoRoot, requestedFile);
+  if (!pluginForFile(requestedAbsGuess)) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      error: { code: 'UNSUPPORTED_LANGUAGE', message: `no analyzer plugin for file: ${requestedFile}` },
+    };
+  }
+
   const graph = buildGraph(repoRoot);
 
   const requestedRelPath = resolveRequestedFile(repoRoot, requestedFile, graph.nodes);
@@ -230,13 +245,16 @@ function analyze(repositoryRoot, requestedFile) {
 
   const impact = computeImpact(graph, requestedRelPath);
 
+  const requestedPlugin = pluginForFile(path.resolve(repoRoot, requestedRelPath));
+  const languageByPlugin = new Map([[javaPlugin, 'java'], [typescriptPlugin, 'typescript']]);
+
   return {
     schemaVersion: SCHEMA_VERSION,
     requestedFile: requestedRelPath,
     graph,
     impact,
     meta: {
-      language: 'java',
+      language: languageByPlugin.get(requestedPlugin) || 'unknown',
       fileCount: graph.nodes.length,
     },
   };
