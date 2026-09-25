@@ -5,12 +5,17 @@
  *
  * No test framework dependency — plain Node `assert`, run with:
  *   node analyze.test.js
+ *
+ * Set KAIROS_JUNIT_OUT=<path> to also write a JUnit-XML report (for Jenkins).
  */
 
 'use strict';
 
 const assert = require('assert');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { execFileSync } = require('child_process');
 const { buildGraph, computeImpact, analyze } = require('./analyze');
 
 const FIXTURE_ROOT = path.resolve(__dirname, '../tests/fixtures/sample-project');
@@ -19,18 +24,55 @@ const CONTROLLER = 'src/main/java/com/example/controller/UserController.java';
 const SERVICE = 'src/main/java/com/example/service/UserService.java';
 const REPOSITORY = 'src/main/java/com/example/repository/UserRepository.java';
 
+const results = [];
 let passed = 0;
+
 function test(name, fn) {
+  const start = Date.now();
   try {
     fn();
     passed += 1;
+    results.push({ name, status: 'pass', time: (Date.now() - start) / 1000 });
     console.log(`  ok - ${name}`);
   } catch (err) {
+    results.push({ name, status: 'fail', time: (Date.now() - start) / 1000, message: err.message });
     console.error(`  FAIL - ${name}`);
     console.error(`    ${err.message}`);
     process.exitCode = 1;
   }
 }
+
+function escapeXml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function writeJUnitReport() {
+  const outPath = process.env.KAIROS_JUNIT_OUT;
+  if (!outPath) return;
+
+  const failures = results.filter((r) => r.status === 'fail').length;
+  const totalTime = results.reduce((sum, r) => sum + r.time, 0).toFixed(3);
+
+  const cases = results.map((r) => {
+    if (r.status === 'fail') {
+      return `    <testcase name="${escapeXml(r.name)}" time="${r.time.toFixed(3)}">\n      <failure message="${escapeXml(r.message)}"/>\n    </testcase>`;
+    }
+    return `    <testcase name="${escapeXml(r.name)}" time="${r.time.toFixed(3)}"/>`;
+  }).join('\n');
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="kairos-analyzer" tests="${results.length}" failures="${failures}" time="${totalTime}">\n${cases}\n</testsuite>\n`;
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, xml);
+  console.log(`\nJUnit report written to ${outPath}`);
+}
+
+process.on('exit', writeJUnitReport);
 
 console.log('buildGraph()');
 test('finds all 3 files in the sample project', () => {
@@ -120,9 +162,6 @@ console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : 
 // computeCoChangeScores() / includeHistory — Step 4
 // ---------------------------------------------------------------------
 
-const fs = require('fs');
-const os = require('os');
-const { execFileSync } = require('child_process');
 const { buildGraph: buildGraphForHistory } = require('./analyze');
 
 function makeTempGitFixture() {
@@ -149,7 +188,6 @@ function makeTempGitFixture() {
   execFileSync('git', ['add', REPO], { cwd: dir });
   execFileSync('git', ['commit', '-q', '-m', 'add repository'], { cwd: dir });
 
-  // SVC and CTRL changed together twice — SVC's strongest co-change partner.
   execFileSync('git', ['add', SVC, CTRL], { cwd: dir });
   execFileSync('git', ['commit', '-q', '-m', 'add service and controller together'], { cwd: dir });
 
@@ -158,7 +196,6 @@ function makeTempGitFixture() {
   execFileSync('git', ['add', SVC, CTRL], { cwd: dir });
   execFileSync('git', ['commit', '-q', '-m', 'tweak both again'], { cwd: dir });
 
-  // REPO changed alone — should never show up as historical for SVC.
   fs.appendFileSync(path.join(dir, REPO), `// solo tweak\n`);
   execFileSync('git', ['add', REPO], { cwd: dir });
   execFileSync('git', ['commit', '-q', '-m', 'solo repository tweak'], { cwd: dir });
@@ -189,7 +226,7 @@ test('excludes files that changed alone, and never includes the file itself', ()
 
 test('returns [] when the directory has no git history at all', () => {
   const { computeCoChangeScores } = require('./analyze');
-  const graph = buildGraph(FIXTURE_ROOT); // real fixture has no .git
+  const graph = buildGraph(FIXTURE_ROOT);
   const scores = computeCoChangeScores(FIXTURE_ROOT, SERVICE, graph);
   assert.deepStrictEqual(scores, []);
 });
@@ -216,8 +253,6 @@ test('analyze() with includeHistory:true adds historical entries additively, not
 
 test('maxCommits option passes through analyze() to co-change scoring', () => {
   const { dir, SVC, CTRL } = makeTempGitFixture();
-  // With maxCommits: 1, only the most recent commit ("solo repository
-  // tweak") is walked — it never touches SVC, so no historical entries.
   const result = analyze(dir, SVC, { includeHistory: true, maxCommits: 1 });
   const historicalEntries = result.impact.affected.filter((a) => a.relation === 'historical');
   assert.deepStrictEqual(historicalEntries, []);
