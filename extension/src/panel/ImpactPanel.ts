@@ -304,7 +304,7 @@ function page(title: string, body: string, watermark: string): string {
 </html>`;
 }
 
-function renderError(result: ImpactErrorResponse): string {
+export function renderError(result: ImpactErrorResponse): string {
   const body = `
     <div class="hero-title">kairos-</div>
     <div class="sub-tag">impact :: could not analyze</div>
@@ -317,7 +317,7 @@ function renderError(result: ImpactErrorResponse): string {
   return page('error', body, 'error');
 }
 
-function renderImpact(result: ImpactResponse): string {
+export function renderImpact(result: ImpactResponse): string {
   const { requestedFile, impact } = result;
 
   const fileList = (items: string[]) =>
@@ -380,7 +380,7 @@ function renderImpact(result: ImpactResponse): string {
 // Only the target's impact neighbourhood is drawn. graph.nodes / graph.edges
 // describe the whole analyzed repository, so anything outside `affected` is
 // deliberately left off the canvas (the table above still lists every affected file).
-function renderGraph(result: ImpactResponse): string {
+export function renderGraph(result: ImpactResponse): string {
   const { graph, impact, requestedFile } = result;
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
 
