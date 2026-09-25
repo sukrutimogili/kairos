@@ -115,3 +115,110 @@ test('returns FILE_NOT_FOUND error for an unknown file', () => {
 });
 
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);
+
+// ---------------------------------------------------------------------
+// computeCoChangeScores() / includeHistory — Step 4
+// ---------------------------------------------------------------------
+
+const fs = require('fs');
+const os = require('os');
+const { execFileSync } = require('child_process');
+const { buildGraph: buildGraphForHistory } = require('./analyze');
+
+function makeTempGitFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kairos-cochange-fixture-'));
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  execFileSync('git', ['config', 'user.email', 'kairos-test@example.com'], { cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'Kairos Test'], { cwd: dir });
+
+  const pkgDir = path.join(dir, 'src/main/java/com/example/service');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  const repoDir = path.join(dir, 'src/main/java/com/example/repository');
+  fs.mkdirSync(repoDir, { recursive: true });
+  const ctrlDir = path.join(dir, 'src/main/java/com/example/controller');
+  fs.mkdirSync(ctrlDir, { recursive: true });
+
+  const SVC = 'src/main/java/com/example/service/UserService.java';
+  const REPO = 'src/main/java/com/example/repository/UserRepository.java';
+  const CTRL = 'src/main/java/com/example/controller/UserController.java';
+
+  fs.writeFileSync(path.join(dir, REPO), `package com.example.repository;\npublic class UserRepository {}\n`);
+  fs.writeFileSync(path.join(dir, SVC), `package com.example.service;\nimport com.example.repository.UserRepository;\npublic class UserService {}\n`);
+  fs.writeFileSync(path.join(dir, CTRL), `package com.example.controller;\nimport com.example.service.UserService;\npublic class UserController {}\n`);
+
+  execFileSync('git', ['add', REPO], { cwd: dir });
+  execFileSync('git', ['commit', '-q', '-m', 'add repository'], { cwd: dir });
+
+  // SVC and CTRL changed together twice — SVC's strongest co-change partner.
+  execFileSync('git', ['add', SVC, CTRL], { cwd: dir });
+  execFileSync('git', ['commit', '-q', '-m', 'add service and controller together'], { cwd: dir });
+
+  fs.appendFileSync(path.join(dir, SVC), `// tweak\n`);
+  fs.appendFileSync(path.join(dir, CTRL), `// tweak\n`);
+  execFileSync('git', ['add', SVC, CTRL], { cwd: dir });
+  execFileSync('git', ['commit', '-q', '-m', 'tweak both again'], { cwd: dir });
+
+  // REPO changed alone — should never show up as historical for SVC.
+  fs.appendFileSync(path.join(dir, REPO), `// solo tweak\n`);
+  execFileSync('git', ['add', REPO], { cwd: dir });
+  execFileSync('git', ['commit', '-q', '-m', 'solo repository tweak'], { cwd: dir });
+
+  return { dir, SVC, REPO, CTRL };
+}
+
+console.log('computeCoChangeScores() / includeHistory');
+
+test('finds the file that co-changed most often, sorted by count desc', () => {
+  const { dir, SVC, CTRL } = makeTempGitFixture();
+  const { computeCoChangeScores } = require('./analyze');
+  const graph = buildGraphForHistory(dir);
+  const scores = computeCoChangeScores(dir, SVC, graph);
+  assert.strictEqual(scores.length, 1);
+  assert.strictEqual(scores[0].id, CTRL);
+  assert.strictEqual(scores[0].relation, 'historical');
+  assert.strictEqual(scores[0].count, 2);
+});
+
+test('excludes files that changed alone, and never includes the file itself', () => {
+  const { dir, REPO } = makeTempGitFixture();
+  const { computeCoChangeScores } = require('./analyze');
+  const graph = buildGraphForHistory(dir);
+  const scores = computeCoChangeScores(dir, REPO, graph);
+  assert.deepStrictEqual(scores, []);
+});
+
+test('returns [] when the directory has no git history at all', () => {
+  const { computeCoChangeScores } = require('./analyze');
+  const graph = buildGraph(FIXTURE_ROOT); // real fixture has no .git
+  const scores = computeCoChangeScores(FIXTURE_ROOT, SERVICE, graph);
+  assert.deepStrictEqual(scores, []);
+});
+
+test('analyze() with includeHistory:false (default) never adds historical entries', () => {
+  const { dir, SVC } = makeTempGitFixture();
+  const result = analyze(dir, SVC);
+  const relations = result.impact.affected.map((a) => a.relation);
+  assert.ok(!relations.includes('historical'));
+});
+
+test('analyze() with includeHistory:true adds historical entries additively, not replacing dependency/dependent', () => {
+  const { dir, SVC, REPO, CTRL } = makeTempGitFixture();
+  const result = analyze(dir, SVC, { includeHistory: true });
+  const dependencyEntry = result.impact.affected.find((a) => a.id === REPO && a.relation === 'dependency');
+  const dependentEntry = result.impact.affected.find((a) => a.id === CTRL && a.relation === 'dependent');
+  assert.ok(dependencyEntry, 'expected a dependency entry for REPO to still be present');
+  assert.ok(dependentEntry, 'expected a dependent entry for CTRL to still be present');
+  const historicalEntries = result.impact.affected.filter((a) => a.relation === 'historical');
+  assert.strictEqual(historicalEntries.length, 1);
+  assert.strictEqual(historicalEntries[0].id, CTRL);
+  assert.strictEqual(historicalEntries[0].count, 2);
+});
+
+test('maxCommits option passes through analyze() to co-change scoring', () => {
+  const { dir, SVC, CTRL } = makeTempGitFixture();
+  // With maxCommits: 1, only the most recent commit ("solo repository
+  // tweak") is walked — it never touches SVC, so no historical entries.
+  const result = analyze(dir, SVC, { includeHistory: true, maxCommits: 1 });
+  const historicalEntries = result.impact.affected.filter((a) => a.relation === 'historical');
+  assert.deepStrictEqual(historicalEntries, []);
+});
