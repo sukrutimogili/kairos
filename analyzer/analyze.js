@@ -8,16 +8,18 @@
  *   - language dispatch (picking a plugin by file extension)
  *   - dependency graph assembly (buildGraph)
  *   - impact analysis (computeImpact, analyze, CLI)
+ *   - co-change scoring (computeCoChangeScores) — Step 4, gated behind
+ *     the includeHistory flag, additive-only on top of impact.affected
  *
- * No behavior change from Phase 1 — see analyzer/analyze.test.js, which
- * must still pass unmodified.
+ * No behavior change from Phase 1 when includeHistory is not set — see
+ * analyzer/analyze.test.js, which must still pass unmodified.
  *
  * Usage:
- *   node analyze.js <repositoryRoot> <requestedFile>
+ *   node analyze.js <repositoryRoot> <requestedFile> [--include-history]
  *
  * Also usable as a module:
  *   const { analyze } = require('./analyze');
- *   const result = analyze(repoRoot, requestedFile);
+ *   const result = analyze(repoRoot, requestedFile, { includeHistory: true });
  */
 
 'use strict';
@@ -33,6 +35,7 @@ const SCHEMA_VERSION = '1.0';
 
 const javaPlugin = require('./languages/java');
 const typescriptPlugin = require('./languages/typescript');
+const { getCommitFileGroups } = require('./history/gitLog');
 
 // extension -> plugin. Add new plugins here (or make this dynamic later).
 const LANGUAGE_PLUGINS = [javaPlugin, typescriptPlugin];
@@ -200,6 +203,50 @@ function computeImpact(graph, requestedFile) {
 }
 
 // ---------------------------------------------------------------------
+// Co-change scoring (historical relation) — Step 4
+// ---------------------------------------------------------------------
+
+/**
+ * Scores how often each other file in the repo changed in the same
+ * commit as requestedFile, using git history (history/gitLog.js).
+ *
+ * Only files that are also nodes in the current dependency graph are
+ * returned, so "historical" entries stay clickable/openable in the
+ * extension panel, same as dependency/dependent entries.
+ *
+ * Returns [] (never throws) if there's no git history available —
+ * matches gitLog.js's own "no history available" contract, so a repo
+ * with no .git or no commits just gets zero historical entries rather
+ * than breaking the whole analyze() call.
+ *
+ * @param {string} repoRoot
+ * @param {string} requestedFile - repo-relative POSIX path, matching graph.nodes[].id
+ * @param {object} graph - the current dependency graph (from buildGraph)
+ * @param {object} [options]
+ * @param {number} [options.maxCommits] - passed through to getCommitFileGroups
+ * @returns {Array<{id, relation: 'historical', count}>} sorted by count
+ *   desc, then id
+ */
+function computeCoChangeScores(repoRoot, requestedFile, graph, options = {}) {
+  const commits = getCommitFileGroups(repoRoot, { maxCommits: options.maxCommits });
+  const knownIds = new Set(graph.nodes.map((n) => n.id));
+
+  const counts = new Map();
+  for (const commit of commits) {
+    if (!commit.files.includes(requestedFile)) continue;
+    for (const file of commit.files) {
+      if (file === requestedFile) continue;
+      if (!knownIds.has(file)) continue; // only files the graph actually knows about
+      counts.set(file, (counts.get(file) || 0) + 1);
+    }
+  }
+
+  return [...counts.entries()]
+    .map(([id, count]) => ({ id, relation: 'historical', count }))
+    .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
+}
+
+// ---------------------------------------------------------------------
 // Top-level entry point — matches docs/CONTRACT.md response/error shape
 // ---------------------------------------------------------------------
 
@@ -207,9 +254,14 @@ function computeImpact(graph, requestedFile) {
  * @param {string} repositoryRoot - path to the repo to analyze
  * @param {string} requestedFile  - path to the target file (absolute, or
  *   relative to repositoryRoot, or relative to cwd)
+ * @param {object} [options]
+ * @param {boolean} [options.includeHistory] - if true, adds "historical"
+ *   entries to impact.affected from co-change scoring. Default false —
+ *   matches docs/CONTRACT.md's includeHistory request field.
+ * @param {number} [options.maxCommits] - passed through to co-change scoring
  * @returns {object} JSON matching docs/CONTRACT.md exactly (success or error)
  */
-function analyze(repositoryRoot, requestedFile) {
+function analyze(repositoryRoot, requestedFile, options = {}) {
   const repoRoot = path.resolve(repositoryRoot);
 
   if (!fs.existsSync(repoRoot) || !fs.statSync(repoRoot).isDirectory()) {
@@ -244,6 +296,15 @@ function analyze(repositoryRoot, requestedFile) {
   }
 
   const impact = computeImpact(graph, requestedRelPath);
+
+  if (options.includeHistory) {
+    const historical = computeCoChangeScores(repoRoot, requestedRelPath, graph, {
+      maxCommits: options.maxCommits,
+    });
+    // Additive only — never replaces the existing dependency/dependent
+    // entries already in impact.affected (per docs/CONTRACT.md).
+    impact.affected = [...impact.affected, ...historical];
+  }
 
   const requestedPlugin = pluginForFile(path.resolve(repoRoot, requestedRelPath));
   const languageByPlugin = new Map([[javaPlugin, 'java'], [typescriptPlugin, 'typescript']]);
@@ -286,15 +347,16 @@ function resolveRequestedFile(repoRoot, requestedFile, nodes) {
 // ---------------------------------------------------------------------
 
 function main() {
-  const [, , repoRootArg, requestedFileArg] = process.argv;
+  const [, , repoRootArg, requestedFileArg, ...rest] = process.argv;
 
   if (!repoRootArg || !requestedFileArg) {
-    console.error('Usage: node analyze.js <repositoryRoot> <requestedFile>');
+    console.error('Usage: node analyze.js <repositoryRoot> <requestedFile> [--include-history]');
     process.exitCode = 1;
     return;
   }
 
-  const result = analyze(repoRootArg, requestedFileArg);
+  const includeHistory = rest.includes('--include-history');
+  const result = analyze(repoRootArg, requestedFileArg, { includeHistory });
   console.log(JSON.stringify(result, null, 2));
 
   if (result.error) process.exitCode = 1;
@@ -311,5 +373,6 @@ module.exports = {
   parseFile,
   buildGraph,
   computeImpact,
+  computeCoChangeScores,
   analyze,
 };
