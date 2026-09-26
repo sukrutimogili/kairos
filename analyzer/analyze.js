@@ -224,7 +224,7 @@ function computeImpact(graph, requestedFile) {
  * @param {object} graph - the current dependency graph (from buildGraph)
  * @param {object} [options]
  * @param {number} [options.maxCommits] - passed through to getCommitFileGroups
- * @returns {Array<{id, relation: 'historical', count}>} sorted by count
+ * @returns {Array<{id, relation: 'historical', distance: 1, count}>} sorted by count
  *   desc, then id
  */
 function computeCoChangeScores(repoRoot, requestedFile, graph, options = {}) {
@@ -242,7 +242,11 @@ function computeCoChangeScores(repoRoot, requestedFile, graph, options = {}) {
   }
 
   return [...counts.entries()]
-    .map(([id, count]) => ({ id, relation: 'historical', count }))
+    // `distance` isn't a graph distance for historical entries (co-change is
+    // not a graph-traversal relation) — it's fixed at 1 per docs/CONTRACT.md
+    // so every impact.affected entry has the field ImpactPanel.ts's
+    // renderGraph() (and the contract itself) require on all of them.
+    .map(([id, count]) => ({ id, relation: 'historical', distance: 1, count }))
     .sort((a, b) => b.count - a.count || a.id.localeCompare(b.id));
 }
 

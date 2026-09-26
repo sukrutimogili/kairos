@@ -251,6 +251,21 @@ test('analyze() with includeHistory:true adds historical entries additively, not
   assert.strictEqual(historicalEntries[0].count, 2);
 });
 
+test('historical entries carry a distance, matching every other impact.affected entry', () => {
+  // CONTRACT.md requires every impact.affected entry to have {id, relation, distance}.
+  // ImpactPanel.ts's renderGraph() places every node by a.distance, so a
+  // historical entry without one breaks the graph layout for real (not just
+  // the contract on paper) — this guards the fix, not just the schema.
+  const { dir, SVC, CTRL } = makeTempGitFixture();
+  const result = analyze(dir, SVC, { includeHistory: true });
+  for (const entry of result.impact.affected) {
+    assert.strictEqual(typeof entry.distance, 'number', `${entry.id} (${entry.relation}) is missing a numeric distance`);
+  }
+  const historicalEntry = result.impact.affected.find((a) => a.id === CTRL && a.relation === 'historical');
+  assert.ok(historicalEntry);
+  assert.strictEqual(historicalEntry.distance, 1);
+});
+
 test('maxCommits option passes through analyze() to co-change scoring', () => {
   const { dir, SVC, CTRL } = makeTempGitFixture();
   const result = analyze(dir, SVC, { includeHistory: true, maxCommits: 1 });
