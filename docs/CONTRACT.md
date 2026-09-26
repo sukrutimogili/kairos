@@ -2,6 +2,11 @@
 
 **Schema version:** `1.0`
 
+> **Phase 2 addendum (Sukruti, Step 1):** this document originally described
+> Phase 1 (Java-only, `graph` carried but not rendered). The additions below
+> are called out explicitly rather than folded silently into the examples
+> above, so a diff of this file shows exactly what changed and why.
+
 This is the single source of truth for the shape of data passed between
 the analyzer (Leela) and the VS Code extension (Indu). Both sides build
 against this document — if it needs to change, that change is agreed by
@@ -15,9 +20,16 @@ The extension asks the analyzer to analyze one file within a repository:
 {
   "schemaVersion": "1.0",
   "repositoryRoot": "path/to/repo",
-  "requestedFile": "src/main/java/com/example/service/UserService.java"
+  "requestedFile": "src/main/java/com/example/service/UserService.java",
+  "includeHistory": false
 }
 ```
+
+- **`includeHistory`** (boolean, optional, **default `false`**) — Phase 2.
+  When true, `impact.affected` additionally includes `relation: "historical"`
+  entries from git co-change analysis (see below). Off by default: it costs
+  a `git log` walk, and Phase 1 consumers that don't send it get Phase 1
+  behavior unchanged.
 
 ## Response
 
@@ -51,6 +63,24 @@ The extension asks the analyzer to analyze one file within a repository:
 }
 ```
 
+**`relation`** is one of `"dependency"`, `"dependent"`, or (Phase 2,
+`includeHistory: true` only) `"historical"` — a file that frequently
+changed in the same commit as `requestedFile`, from git history, with no
+direct import edge to it at all. A historical entry also carries `count`
+(number of shared commits) and, like every `affected` entry, `distance` —
+fixed at `1` for historical entries specifically **by convention, not by
+graph traversal**: co-change isn't a graph edge, so there's no distance to
+measure, and `1` was chosen (over adding a separate `count`-only shape) so
+every consumer that reads `affected` — notably `ImpactPanel.ts`'s
+`renderGraph()`, which places every node by `.distance` — keeps working
+against one shape instead of branching on `relation` first. `count` is
+extra, historical-only data, not a replacement for `distance`.
+
+**`meta.language`** — Phase 1 only ever set this to `"java"`. Phase 2 adds
+`"typescript"` (and `"unknown"` if a file was analyzed but no plugin could
+be matched, which should not normally happen since `UNSUPPORTED_LANGUAGE`
+is returned earlier in that case — see below).
+
 ## Error response
 
 ```json
@@ -60,7 +90,14 @@ The extension asks the analyzer to analyze one file within a repository:
 }
 ```
 
-Phase 1 error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_LANGUAGE`, `ANALYSIS_FAILED`.
+Error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_LANGUAGE`, `ANALYSIS_FAILED`.
+`UNSUPPORTED_LANGUAGE` was reserved in Phase 1 for exactly this case and is
+now live in Phase 2: `requestedFile`'s extension matches no analyzer plugin
+(currently Java, TypeScript/JavaScript). This is distinct from
+`FILE_NOT_FOUND` (extension recognized, but the file isn't in the analyzed
+repo) — the panel should show a different, more specific message for each
+(e.g. "Kairos doesn't support this file type yet" vs. "file not found in
+this workspace").
 
 ## Design rules (why this shape, and why it stays non-redundant)
 
@@ -82,3 +119,13 @@ Phase 1 error codes: `FILE_NOT_FOUND`, `UNSUPPORTED_LANGUAGE`, `ANALYSIS_FAILED`
 - **Wording constraint:** UI text built on this data says "potentially
   affected," "likely impact," "areas to review" — never "safe" or
   "guaranteed."
+- **`graph.nodes`/`graph.edges` is no longer just carried data.** Phase 1
+  computed it but the panel didn't draw it; Phase 2's panel renders it as
+  the dependency graph, so a change to `graph`'s shape is now a rendering
+  change for Indu's side, not just a data change for Leela's.
+- **Every `impact.affected` entry has a numeric `distance`, with no
+  exceptions** — this was implicit in Phase 1 (all entries were graph
+  distances) and is now explicit because `historical` entries have no
+  natural one; see the `distance: 1` convention above. Any future new
+  `relation` value must pick a `distance` convention here, in this
+  document, before analyzer code ships it.
