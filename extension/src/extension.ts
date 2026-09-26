@@ -18,7 +18,10 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showWarningMessage('Kairos: open a folder or workspace first.');
       return;
     }
-    const result = await getImpactData(workspaceRoot, file);
+    const includeHistory = vscode.workspace
+      .getConfiguration('kairos')
+      .get<boolean>('includeHistory', false);
+    const result = await getImpactData(workspaceRoot, file, { includeHistory });
     ImpactPanel.show(result);
   });
 
