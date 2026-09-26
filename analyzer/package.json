@@ -1,0 +1,11 @@
+{
+  "name": "kairos-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kairos static analyzer — dependency graph + impact analysis",
+  "main": "analyze.js",
+  "scripts": {
+    "test": "node analyze.test.js",
+    "test:junit": "KAIROS_JUNIT_OUT=./reports/analyzer-junit.xml node analyze.test.js"
+  }
+}

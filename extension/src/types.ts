@@ -13,10 +13,10 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string;
   to: string;
-  kind: 'import';
+  kind: 'import' | 'same-package-reference' | 'historical';
 }
 
-export type AffectedRelation = 'dependent' | 'dependency';
+export type AffectedRelation = 'dependent' | 'dependency' | 'historical';
 
 export interface AffectedEntry {
   id: string;

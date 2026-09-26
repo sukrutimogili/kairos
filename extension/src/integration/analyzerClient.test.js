@@ -89,4 +89,59 @@ test('result is freshly computed, not a stale mock', () => {
   assert.deepStrictEqual(ids, [...ids].sort());
 });
 
+// --- Sukruti's Step 5 integration test: includeHistory, TS project + real
+// git history, flowing all the way through the *compiled* client the
+// extension actually loads at runtime (not analyze.js directly). ---
+
+const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+
+function makeTempTsGitFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kairos-client-git-'));
+  const git = (...args) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+  git('init', '-q');
+  git('config', 'user.email', 'test@kairos.local');
+  git('config', 'user.name', 'Kairos Test');
+
+  const SVC = 'src/userService.ts';
+  const REPO = 'src/userRepository.ts';
+  fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(dir, REPO), 'export function findUser() { return null; }\n');
+  fs.writeFileSync(
+    path.join(dir, SVC),
+    "import { findUser } from './userRepository';\nexport function getUser() { return findUser(); }\n"
+  );
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add service and repository');
+
+  // A second commit touching both files together, so they co-change.
+  fs.appendFileSync(path.join(dir, REPO), '// note\n');
+  fs.appendFileSync(path.join(dir, SVC), '// note\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'touch both files together');
+
+  return { dir, SVC, REPO };
+}
+
+test('includeHistory:true flows through the compiled client into a historical entry with a distance', () => {
+  const { dir, SVC, REPO } = makeTempTsGitFixture();
+  const withoutHistory = getImpactData(dir, SVC, { includeHistory: false });
+  assert.strictEqual(
+    withoutHistory.impact.affected.some((a) => a.relation === 'historical'),
+    false,
+    'includeHistory:false (or omitted) must not add historical entries'
+  );
+
+  const withHistory = getImpactData(dir, SVC, { includeHistory: true });
+  assert.strictEqual(withHistory.meta.language, 'typescript');
+  const historical = withHistory.impact.affected.find((a) => a.relation === 'historical');
+  assert.ok(historical, 'expected a historical entry when includeHistory is true');
+  assert.strictEqual(typeof historical.distance, 'number', 'historical entry must carry a numeric distance (CONTRACT.md)');
+  // REPO is already a dependency edge, so co-change history for this tiny
+  // fixture surfaces on REPO too -- additive, not a replacement of it.
+  const dependencyEntry = withHistory.impact.affected.find((a) => a.id === REPO && a.relation === 'dependency');
+  assert.ok(dependencyEntry, 'the existing dependency entry must still be present alongside history');
+});
+
 console.log(`\n${passed} test(s) passed${process.exitCode ? ', with failures' : ''}.`);

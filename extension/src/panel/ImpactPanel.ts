@@ -9,6 +9,15 @@ export class ImpactPanel {
   private constructor(panel: vscode.WebviewPanel) {
     this.panel = panel;
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.webview.onDidReceiveMessage(
+      (msg) => {
+        if (msg?.type === 'openFile' && typeof msg.path === 'string') {
+          openRepoFile(msg.path);
+        }
+      },
+      null,
+      this.disposables
+    );
   }
 
   public static show(result: ImpactResult) {
@@ -19,7 +28,7 @@ export class ImpactPanel {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      'kairosImpact', 'Code Impact', column ?? vscode.ViewColumn.Beside, { enableScripts: false }
+      'kairosImpact', 'Code Impact', column ?? vscode.ViewColumn.Beside, { enableScripts: true }
     );
     ImpactPanel.currentPanel = new ImpactPanel(panel);
     ImpactPanel.currentPanel.update(result);
@@ -35,16 +44,7 @@ export class ImpactPanel {
   }
 }
 
-// =============================================================================
-// KAIROS-EDITORIAL-UI
-// Swiss / editorial presentation layer. Presentation only: these functions turn
-// an ImpactResult into static HTML. They perform no analysis, open no files and
-// send or receive no messages, so the ImpactPanel lifecycle above and the data
-// contract (docs/CONTRACT.md) are unaffected.
-// =============================================================================
-
-// Scripts are disabled for this panel, so the page needs nothing but inline CSS.
-const CSP = "default-src 'none'; style-src 'unsafe-inline';";
+const CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';";
 
 const STYLES = `
   :root {
@@ -59,11 +59,13 @@ const STYLES = `
     --node-hover: #22222a;
     --node-stroke: #42424e;
     --edge: #33333d;
+    --rel-dependency: #3ddc84;
+    --rel-dependent: #ff9f43;
+    --rel-historical: #9b6bff;
     --font-mono: 'Space Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, Consolas, 'Courier New', monospace;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
   html { background: var(--bg); }
 
   body {
@@ -76,7 +78,6 @@ const STYLES = `
     padding: 2rem 2.5rem 6rem 2.5rem;
   }
 
-  /* Scaled up by 5% */
   .hero-title {
     font-size: clamp(3.65rem, 6.3vw, 4.45rem);
     font-weight: 700;
@@ -97,7 +98,6 @@ const STYLES = `
     overflow-wrap: anywhere;
   }
 
-  /* Watermark moved to background layer (pointer-events none + lower opacity) */
   .watermark-bottom {
     position: fixed;
     bottom: -1.5rem;
@@ -114,11 +114,7 @@ const STYLES = `
     opacity: 0.18;
   }
 
-  .content-wrapper { 
-    position: relative; 
-    z-index: 2; 
-    max-width: 1050px; 
-  }
+  .content-wrapper { position: relative; z-index: 2; max-width: 1050px; }
 
   .section-label {
     font-size: 0.82rem;
@@ -149,18 +145,10 @@ const STYLES = `
     padding-top: 1rem;
     margin-bottom: 2rem;
   }
-
   .summary-cols.single { grid-template-columns: minmax(0, 1fr); }
 
   .item-list { list-style: none; }
-  .item-list li {
-    font-size: 0.92rem;
-    padding: 0.3rem 0;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    min-width: 0;
-  }
+  .item-list li { font-size: 0.92rem; padding: 0.3rem 0; display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
   .item-list li.empty { color: var(--fg-muted); font-style: italic; }
   .item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bullet-accent { color: var(--accent); font-weight: 700; }
@@ -195,43 +183,17 @@ const STYLES = `
   }
   .cell-file { display: flex; gap: 0.85rem; align-items: center; min-width: 0; }
   .cell.align-right { text-align: right; }
-
   .index-num { color: var(--fg-muted); min-width: 1.7rem; font-size: 0.84rem; }
 
-  .filename {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    padding: 1px 4px;
-    margin-left: -4px;
-  }
+  .filename { min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 1px 4px; margin-left: -4px; }
   .data-row:hover .filename { color: #fff; background: var(--accent); }
   .data-row:hover .cell { color: var(--fg); }
 
-  .impact-grid .empty-row {
-    grid-column: 1 / -1;
-    padding: 0.6rem 0;
-    font-size: 0.92rem;
-    color: var(--fg-muted);
-    font-style: italic;
-  }
-
-  .disclaimer-note {
-    font-size: 0.82rem;
-    color: var(--fg-muted);
-    margin-top: 0.85rem;
-    font-style: italic;
-  }
-
+  .impact-grid .empty-row { grid-column: 1 / -1; padding: 0.6rem 0; font-size: 0.92rem; color: var(--fg-muted); font-style: italic; }
+  .disclaimer-note { font-size: 0.82rem; color: var(--fg-muted); margin-top: 0.85rem; font-style: italic; }
   .error-message { font-size: 1rem; line-height: 1.5; max-width: 70ch; overflow-wrap: anywhere; }
 
-  /* Topology Graph Card */
-  .graph-card {
-    margin-top: 1.25rem;
-    border: 1px solid var(--border);
-    background-color: var(--panel);
-    overflow: hidden;
-  }
+  .graph-card { margin-top: 1.25rem; border: 1px solid var(--border); background-color: var(--panel); overflow: hidden; }
   .graph-header {
     display: flex;
     justify-content: space-between;
@@ -246,11 +208,21 @@ const STYLES = `
     letter-spacing: 0.08em;
   }
   .graph-header .root-key { color: var(--accent); white-space: nowrap; }
+  .graph-header .legend { display: flex; gap: 0.9rem; font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .graph-header .legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .legend-dot.dependency { background: var(--rel-dependency); }
+  .legend-dot.dependent { background: var(--rel-dependent); }
+  .legend-dot.historical { background: var(--rel-historical); }
   .graph-scroll { overflow-x: auto; }
   .graph-canvas { display: block; margin: 0 auto; }
+  .graph-truncated-note { padding: 0.6rem 1.25rem; font-size: 0.8rem; color: var(--fg-muted); font-style: italic; border-top: 1px solid var(--border); }
 
   .graph-edge { stroke: var(--edge); stroke-width: 2; stroke-dasharray: 4; fill: none; }
   .graph-edge.active { stroke: var(--accent); stroke-dasharray: none; }
+  .graph-edge-import { stroke: var(--edge); }
+  .graph-edge-same-package-reference { stroke: #5a5a68; stroke-dasharray: 2 3; }
+  .graph-edge-historical { stroke: var(--rel-historical); stroke-dasharray: 6 3; }
   .arrow-head { fill: var(--node-stroke); }
   .arrow-head.active { fill: var(--accent); }
 
@@ -268,6 +240,12 @@ const STYLES = `
   .node-group.root .node-circle { fill: var(--accent); stroke: #fff; }
   .node-group:hover .node-circle { stroke: var(--accent); fill: var(--node-hover); filter: drop-shadow(0 0 8px var(--accent-glow)); }
   .node-group.root:hover .node-circle { fill: var(--accent); }
+  .node-group.rel-dependency .node-circle { stroke: var(--rel-dependency); }
+  .node-group.rel-dependent .node-circle { stroke: var(--rel-dependent); }
+  .node-group.rel-historical .node-circle { stroke: var(--rel-historical); }
+  .node-group.cluster .node-circle { fill: var(--panel); stroke: var(--fg-muted); stroke-dasharray: 3 3; }
+  .node-group.cluster .node-label { fill: var(--fg-muted); }
+  .node-group.cluster:hover .node-circle { filter: none; stroke: var(--fg-muted); fill: var(--panel); }
 
   .node-label {
     font-family: var(--font-mono);
@@ -284,6 +262,7 @@ const STYLES = `
     .summary-cols { grid-template-columns: minmax(0, 1fr); gap: 1.25rem; }
     .cell { font-size: 0.89rem; }
     .cell-file { gap: 0.5rem; }
+    .graph-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
   }
 `;
 
@@ -300,11 +279,22 @@ function page(title: string, body: string, watermark: string): string {
 <body>
   <div class="content-wrapper">${body}</div>
   <div class="watermark-bottom" aria-hidden="true">_${escapeHtml(watermark)}</div>
+  <script>
+    const vscode = acquireVsCodeApi();
+    function openNode(id) { vscode.postMessage({ type: 'openFile', path: id }); }
+  </script>
 </body>
 </html>`;
 }
 
-function renderError(result: ImpactErrorResponse): string {
+const ERROR_HINTS: Record<string, string> = {
+  FILE_NOT_FOUND: 'Make sure the active file is inside the opened workspace folder, and that it was picked up by the analyzer.',
+  UNSUPPORTED_LANGUAGE: 'Kairos doesn\u2019t support this file type yet. Select a supported source file and try again.',
+  ANALYSIS_FAILED: 'Something went wrong while analyzing the repository. Check the file path and try again.',
+};
+
+export function renderError(result: ImpactErrorResponse): string {
+  const hint = ERROR_HINTS[result.error.code];
   const body = `
     <div class="hero-title">kairos-</div>
     <div class="sub-tag">impact :: could not analyze</div>
@@ -312,12 +302,13 @@ function renderError(result: ImpactErrorResponse): string {
       <div>
         <div class="section-label">${escapeHtml(result.error.code)}</div>
         <p class="error-message">${escapeHtml(result.error.message)}</p>
+        ${hint ? `<p class="disclaimer-note">${escapeHtml(hint)}</p>` : ''}
       </div>
     </div>`;
   return page('error', body, 'error');
 }
 
-function renderImpact(result: ImpactResponse): string {
+export function renderImpact(result: ImpactResponse): string {
   const { requestedFile, impact } = result;
 
   const fileList = (items: string[]) =>
@@ -380,9 +371,12 @@ function renderImpact(result: ImpactResponse): string {
 // Only the target's impact neighbourhood is drawn. graph.nodes / graph.edges
 // describe the whole analyzed repository, so anything outside `affected` is
 // deliberately left off the canvas (the table above still lists every affected file).
-function renderGraph(result: ImpactResponse): string {
+const MAX_PER_COLUMN = 6;
+
+export function renderGraph(result: ImpactResponse): string {
   const { graph, impact, requestedFile } = result;
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+  const relationById = new Map(impact.affected.map((a) => [a.id, a.relation]));
 
   const layerOf = new Map<string, number>([[requestedFile, 0]]);
   for (const a of impact.affected) {
@@ -396,6 +390,18 @@ function renderGraph(result: ImpactResponse): string {
     if (col) col.push(id);
     else columns.set(layer, [id]);
   }
+
+  const clusterCounts = new Map<string, number>();
+  for (const [layer, ids] of columns) {
+    if (ids.length > MAX_PER_COLUMN) {
+      const keep = ids.slice(0, MAX_PER_COLUMN - 1);
+      const clusterId = `__cluster__${layer}`;
+      clusterCounts.set(clusterId, ids.length - keep.length);
+      keep.push(clusterId);
+      columns.set(layer, keep);
+    }
+  }
+
   const layers = [...columns.keys()].sort((a, b) => a - b);
 
   const COL_W = 240;
@@ -433,15 +439,26 @@ function renderGraph(result: ImpactResponse): string {
     const ux = dx / len;
     const uy = dy / len;
     const active = e.from === requestedFile || e.to === requestedFile;
+    const kindClass = `graph-edge-${e.kind.replace(/[^a-z0-9-]/gi, '-')}`;
     return [
-      `<line class="graph-edge${active ? ' active' : ''}" x1="${fmt(a.x + ux * (a.r + GAP_START))}" y1="${fmt(a.y + uy * (a.r + GAP_START))}" x2="${fmt(b.x - ux * (b.r + GAP_END))}" y2="${fmt(b.y - uy * (b.r + GAP_END))}" marker-end="url(#${active ? 'kairos-arrow-active' : 'kairos-arrow'})" />`,
+      `<line class="graph-edge ${kindClass}${active ? ' active' : ''}" x1="${fmt(a.x + ux * (a.r + GAP_START))}" y1="${fmt(a.y + uy * (a.r + GAP_START))}" x2="${fmt(b.x - ux * (b.r + GAP_END))}" y2="${fmt(b.y - uy * (b.r + GAP_END))}" marker-end="url(#${active ? 'kairos-arrow-active' : 'kairos-arrow'})" />`,
     ];
   });
 
   const nodeMarkup = [...placed]
     .map(([id, p]) => {
+      if (clusterCounts.has(id)) {
+        const count = clusterCounts.get(id)!;
+        return `<g class="node-group cluster" transform="translate(${fmt(p.x)}, ${fmt(p.y)})">
+            <title>${count} more file${count === 1 ? '' : 's'} not shown</title>
+            <circle class="node-circle" r="${p.r}" />
+            <text class="node-label" y="${p.r + 20}">+${count} more</text>
+          </g>`;
+      }
+      const relation = relationById.get(id);
+      const relClass = id !== requestedFile && relation ? ` rel-${relation}` : '';
       const label = nodeById.get(id)?.className ?? shortName(id).replace(/\.java$/, '');
-      return `<g class="node-group${id === requestedFile ? ' root' : ''}" transform="translate(${fmt(p.x)}, ${fmt(p.y)})">
+      return `<g class="node-group${id === requestedFile ? ' root' : ''}${relClass}" transform="translate(${fmt(p.x)}, ${fmt(p.y)})" style="cursor:pointer" onclick="openNode('${escapeJsString(id)}')">
           <title>${escapeHtml(id)}</title>
           <circle class="node-circle" r="${p.r}" />
           <text class="node-label" y="${p.r + 20}">${escapeHtml(truncate(label, 24))}</text>
@@ -456,8 +473,20 @@ function renderGraph(result: ImpactResponse): string {
     })
     .join('');
 
+  const truncatedNote = clusterCounts.size
+    ? `<div class="graph-truncated-note">Some nodes are grouped into "+N more" clusters to keep this view readable. Open the file directly, or check the table above, to see everything.</div>`
+    : '';
+
   return `<div class="graph-card">
-      <div class="graph-header"><span>Topology Map :: Layered View</span><span class="root-key">&#9679; Selected Root</span></div>
+      <div class="graph-header">
+        <span>Topology Map :: Layered View</span>
+        <span class="legend">
+          <span><span class="legend-dot dependency"></span>dependency</span>
+          <span><span class="legend-dot dependent"></span>dependent</span>
+          <span><span class="legend-dot historical"></span>historical</span>
+          <span class="root-key">&#9679; Selected Root</span>
+        </span>
+      </div>
       <div class="graph-scroll">
         <svg class="graph-canvas" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Dependency graph for ${escapeHtml(shortName(requestedFile))}">
           <defs>
@@ -467,6 +496,7 @@ function renderGraph(result: ImpactResponse): string {
           ${captions}${edgeLines.join('')}${nodeMarkup}
         </svg>
       </div>
+      ${truncatedNote}
     </div>`;
 }
 
@@ -476,4 +506,18 @@ function truncate(s: string, max: number): string { return s.length > max ? s.sl
 function shortName(path: string): string { return path.split('/').pop() ?? path; }
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function escapeJsString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+async function openRepoFile(relPath: string): Promise<void> {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+  if (!root) return;
+  const uri = vscode.Uri.joinPath(root, relPath);
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(doc, { preserveFocus: false });
+  } catch {
+    vscode.window.showWarningMessage(`Kairos: could not open ${relPath}`);
+  }
 }

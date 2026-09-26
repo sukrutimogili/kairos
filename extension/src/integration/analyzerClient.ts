@@ -21,7 +21,15 @@ export const ANALYZER_ENTRY = path.resolve(__dirname, '../../../analyzer/analyze
  * @param repositoryRoot - path to the repo being analyzed. In the real
  *   extension this is vscode.workspace.workspaceFolders[0].uri.fsPath.
  * @param requestedFile - path to the file the user selected.
+ * @param options.includeHistory - Sukruti's Step 5 plumbing: forwarded
+ *   straight through to analyze()'s own includeHistory option (default
+ *   false), which is itself forwarded straight through to
+ *   computeCoChangeScores() — no logic duplicated at this layer.
  */
-export function getImpactData(repositoryRoot: string, requestedFile: string) {
-  return analyze(repositoryRoot, requestedFile);
+export function getImpactData(
+  repositoryRoot: string,
+  requestedFile: string,
+  options: { includeHistory?: boolean } = {}
+) {
+  return analyze(repositoryRoot, requestedFile, options);
 }
