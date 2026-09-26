@@ -19,7 +19,7 @@ export class ImpactPanel {
       return;
     }
     const panel = vscode.window.createWebviewPanel(
-      'kairosImpact', 'Code Impact', column ?? vscode.ViewColumn.Beside, { enableScripts: false }
+      'kairosImpact', 'Code Impact', column ?? vscode.ViewColumn.Beside, { enableScripts: true }
     );
     ImpactPanel.currentPanel = new ImpactPanel(panel);
     ImpactPanel.currentPanel.update(result);
@@ -44,7 +44,7 @@ export class ImpactPanel {
 // =============================================================================
 
 // Scripts are disabled for this panel, so the page needs nothing but inline CSS.
-const CSP = "default-src 'none'; style-src 'unsafe-inline';";
+const CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';";
 
 const STYLES = `
   :root {
@@ -300,11 +300,23 @@ function page(title: string, body: string, watermark: string): string {
 <body>
   <div class="content-wrapper">${body}</div>
   <div class="watermark-bottom" aria-hidden="true">_${escapeHtml(watermark)}</div>
+
+<script>
+const vscode = acquireVsCodeApi();
+function openNode(path) {
+  vscode.postMessage({ command: 'openFile', path });
+}
+</script>
 </body>
 </html>`;
 }
 
-function renderError(result: ImpactErrorResponse): string {
+export function renderError(result: ImpactErrorResponse): string {
+  const hint =
+    result.error.code === 'UNSUPPORTED_LANGUAGE'
+      ? `<p class="error-hint">This file doesn't use a language currently supported by Kairos.</p>`
+      : '';
+
   const body = `
     <div class="hero-title">kairos-</div>
     <div class="sub-tag">impact :: could not analyze</div>
@@ -312,12 +324,13 @@ function renderError(result: ImpactErrorResponse): string {
       <div>
         <div class="section-label">${escapeHtml(result.error.code)}</div>
         <p class="error-message">${escapeHtml(result.error.message)}</p>
+        ${hint}
       </div>
     </div>`;
   return page('error', body, 'error');
 }
 
-function renderImpact(result: ImpactResponse): string {
+export function renderImpact(result: ImpactResponse): string {
   const { requestedFile, impact } = result;
 
   const fileList = (items: string[]) =>
@@ -380,7 +393,7 @@ function renderImpact(result: ImpactResponse): string {
 // Only the target's impact neighbourhood is drawn. graph.nodes / graph.edges
 // describe the whole analyzed repository, so anything outside `affected` is
 // deliberately left off the canvas (the table above still lists every affected file).
-function renderGraph(result: ImpactResponse): string {
+export function renderGraph(result: ImpactResponse): string {
   const { graph, impact, requestedFile } = result;
   const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
 
@@ -396,6 +409,17 @@ function renderGraph(result: ImpactResponse): string {
     if (col) col.push(id);
     else columns.set(layer, [id]);
   }
+  // Collapse oversized columns so large graphs remain readable.
+  const MAX_VISIBLE_PER_COLUMN = 8;
+  for (const [layer, ids] of columns) {
+    if (ids.length > MAX_VISIBLE_PER_COLUMN) {
+      const visible = ids.slice(0, MAX_VISIBLE_PER_COLUMN);
+      const hiddenCount = ids.length - MAX_VISIBLE_PER_COLUMN;
+      visible.push(`__cluster_${layer}_${hiddenCount}`);
+      columns.set(layer, visible);
+    }
+  }
+
   const layers = [...columns.keys()].sort((a, b) => a - b);
 
   const COL_W = 240;
@@ -433,15 +457,24 @@ function renderGraph(result: ImpactResponse): string {
     const ux = dx / len;
     const uy = dy / len;
     const active = e.from === requestedFile || e.to === requestedFile;
+    const kindClass = e.kind === 'historical'
+      ? ' graph-edge-historical'
+      : ' graph-edge-import';
     return [
-      `<line class="graph-edge${active ? ' active' : ''}" x1="${fmt(a.x + ux * (a.r + GAP_START))}" y1="${fmt(a.y + uy * (a.r + GAP_START))}" x2="${fmt(b.x - ux * (b.r + GAP_END))}" y2="${fmt(b.y - uy * (b.r + GAP_END))}" marker-end="url(#${active ? 'kairos-arrow-active' : 'kairos-arrow'})" />`,
+      `<line class="graph-edge${kindClass}${active ? ' active' : ''}" x1="${fmt(a.x + ux * (a.r + GAP_START))}" y1="${fmt(a.y + uy * (a.r + GAP_START))}" x2="${fmt(b.x - ux * (b.r + GAP_END))}" y2="${fmt(b.y - uy * (b.r + GAP_END))}" marker-end="url(#${active ? 'kairos-arrow-active' : 'kairos-arrow'})" />`,
     ];
   });
 
   const nodeMarkup = [...placed]
     .map(([id, p]) => {
-      const label = nodeById.get(id)?.className ?? shortName(id).replace(/\.java$/, '');
-      return `<g class="node-group${id === requestedFile ? ' root' : ''}" transform="translate(${fmt(p.x)}, ${fmt(p.y)})">
+      const clusterMatch = id.match(/^__cluster_(-?\d+)_(\d+)$/);
+      const label = clusterMatch
+        ? `+${clusterMatch[2]} more`
+        : nodeById.get(id)?.className ?? shortName(id).replace(/\.java$/, '');
+      const affectedEntry = impact.affected.find(a => a.id === id);
+      const relationClass = affectedEntry ? ` rel-${affectedEntry.relation}` : '';
+      const safeId = escapeHtml(id).replace(/'/g, '&#39;');
+      return `<g class="node-group${relationClass}${id === requestedFile ? ' root' : ''}" transform="translate(${fmt(p.x)}, ${fmt(p.y)})" onclick="openNode('${safeId}')">
           <title>${escapeHtml(id)}</title>
           <circle class="node-circle" r="${p.r}" />
           <text class="node-label" y="${p.r + 20}">${escapeHtml(truncate(label, 24))}</text>
