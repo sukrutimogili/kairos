@@ -8,7 +8,8 @@ import { getImpactData as getRealImpactData } from '../integration/analyzerClien
  */
 export async function getImpactData(
   repositoryRoot: string,
-  requestedFile: string
+  requestedFile: string,
+  options: { includeHistory?: boolean } = {}
 ): Promise<ImpactResult> {
-  return getRealImpactData(repositoryRoot, requestedFile) as ImpactResult;
+  return getRealImpactData(repositoryRoot, requestedFile, options) as ImpactResult;
 }
