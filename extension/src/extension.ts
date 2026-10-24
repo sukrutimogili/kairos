@@ -10,7 +10,7 @@ export function activate(context: vscode.ExtensionContext) {
   const showImpact = vscode.commands.registerCommand('kairos.showImpact', async () => {
     const file = getSelectedFile();
     if (!file) {
-      vscode.window.showWarningMessage('Kairos: open or select a Java file first.');
+      vscode.window.showWarningMessage('Kairos: open or select a source file first.');
       return;
     }
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -18,10 +18,15 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showWarningMessage('Kairos: open a folder or workspace first.');
       return;
     }
-    const includeHistory = vscode.workspace
-      .getConfiguration('kairos')
-      .get<boolean>('includeHistory', false);
-    const result = await getImpactData(workspaceRoot, file, { includeHistory });
+    const config = vscode.workspace.getConfiguration('kairos');
+    const includeHistory = config.get<boolean>('includeHistory', false);
+    const includeFunctions = config.get<boolean>('includeFunctions', false);
+    const includeCrossFile = config.get<boolean>('includeCrossFile', false);
+    const result = await getImpactData(workspaceRoot, file, {
+      includeHistory,
+      includeFunctions,
+      includeCrossFile,
+    });
     ImpactPanel.show(result);
   });
 
