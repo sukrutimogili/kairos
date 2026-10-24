@@ -129,3 +129,121 @@ this workspace").
   natural one; see the `distance: 1` convention above. Any future new
   `relation` value must pick a `distance` convention here, in this
   document, before analyzer code ships it.
+
+---
+
+## Phase 3 addendum: dynamic imports, function-level graph, cross-file mapping
+
+Everything below is **opt-in and additive**. A request that sets none of the new
+flags gets byte-for-byte the Phase 2 response shape (this is asserted in
+`analyzer/languages/dynamic.test.js`, "Backward compatibility").
+
+### New request fields
+
+```json
+{
+  "includeFunctions": false,
+  "includeCrossFile": false
+}
+```
+
+- **`includeFunctions`** (boolean, default `false`) — adds `functionGraph` and
+  `impact.functionImpact` to the response (see below).
+- **`includeCrossFile`** (boolean, default `false`) — adds HTML / template /
+  stylesheet / config files to `graph.nodes` and connects them to code through
+  the new edge kinds. With this flag, `requestedFile` may also be one of those
+  non-code files (without it, they are still `UNSUPPORTED_LANGUAGE`).
+
+### 1. Dynamic dependencies and new languages (always on)
+
+Not behind a flag: they only add edges the old analyzer could not see.
+
+- **Python** is now a supported language (`meta.language: "python"`): `import a.b`,
+  `from a import b`, relative imports, and `__init__.py` packages.
+- New `graph.edges[].kind` values:
+  - `dynamic-import` — `import('./x')`, `React.lazy(() => import('./x'))`,
+    `require.resolve('./x')`, and Python `importlib.import_module('a.b')` /
+    `__import__('a.b')`. A **computed** specifier with a static directory prefix
+    (``import(`./locales/${lang}.js`)``, `require('./plugins/' + name)`,
+    `import_module(f'app.plugins.{name}')`) fans out to **every file under that
+    prefix** — an intentional over-approximation ("potentially affected").
+  - `reflection` — Java `Class.forName("pkg.Class")` / `loadClass("pkg.Class")`
+    with a literal class name.
+- A static import of the same file pair always wins over a dynamic one (one edge
+  per `from => to` pair, as before).
+
+### 2. Function-level graph (`includeFunctions: true`)
+
+Response gains:
+
+```json
+{
+  "functionGraph": {
+    "nodes": [
+      { "id": "src/svc/UserService.java#UserService.getUser", "file": "src/svc/UserService.java",
+        "name": "getUser", "className": "UserService", "kind": "method",
+        "startLine": 12, "endLine": 19, "arity": 1 }
+    ],
+    "edges": [
+      { "from": "src/svc/UserService.java#UserService.getUser",
+        "to": "src/repo/UserRepository.java#UserRepository.find",
+        "kind": "call", "confidence": "high", "line": 14 }
+    ]
+  },
+  "impact": {
+    "functionImpact": [
+      { "id": "src/svc/UserService.java#UserService.getUser",
+        "callers": ["..."], "callees": ["..."],
+        "affected": [ { "id": "...", "relation": "caller", "distance": 1 } ] }
+    ]
+  }
+}
+```
+
+- **Function id** = `<repo-relative file>#<Class.>name` (same "id is something you can
+  open" rule as file nodes; the part before `#` is the file node id). Overloads or
+  shadowed names get an `@L<line>` suffix.
+- **`kind`** (node) is `function`, `method`, `constructor`, or `template` (a
+  pseudo-node `<file>#<template>` standing for "this template/HTML file", used
+  only with `includeCrossFile`).
+- **Edge direction** matches the file graph: `from` calls `to`, so `from` depends on `to`.
+- **`confidence`** is `high` (resolved through imports, same-file scope, `this`/`self`,
+  or a declared/inferred receiver type) or `medium` (receiver type unknown, but exactly one
+  method of that name exists in files the caller's file already depends on). Calls that
+  cannot be resolved are **dropped, never guessed**.
+- **`impact.functionImpact`** has one entry per function defined in `requestedFile`.
+  `callers` / `callees` are exactly the distance-1 neighbours in `functionGraph.edges`
+  (same "projection, never drifts" rule as `dependsOn`/`dependents`; asserted in
+  `functionGraph.test.js`). `affected[].relation` is `caller` | `callee`; `distance` is a
+  real graph distance (BFS), so the every-entry-has-a-numeric-distance rule still holds.
+- Per-function lookups and call paths (bug localization) are available through the
+  analyzer API `analyzeFunction(repo, nameOrId, { file, pathTo })` and the CLI
+  `node analyze.js <repo> --function <name> [--path-to <name>]`.
+
+### 3. Cross-file and non-code relationships (`includeCrossFile: true`)
+
+- Non-code nodes appear in `graph.nodes` with an extra optional field
+  `fileType`: `html` | `template` | `style` | `config`. `className` is the file name and
+  `package` is `""`. Source-code nodes do not get a `fileType`.
+- `graph.edges[]` may carry an optional `detail` string: the evidence for the edge
+  (e.g. `#submitBtn`, `process.env.API_URL`, `scripts.start`).
+- New edge kinds (`from` depends on `to`):
+
+| kind | from -> to | evidence |
+|---|---|---|
+| `html-script` | html/template -> js/ts/py | `<script src>` (incl. Flask `url_for('static', filename=...)`) |
+| `html-style` | html/template -> css | `<link rel=stylesheet>` |
+| `html-link` | html -> html | `<a href>`, `<iframe src>`, `<form action>` to a local page |
+| `style-import` | css -> css | `@import` |
+| `dom-reference` | js/ts -> html/template | `getElementById`, `querySelector(All)`, `getElementsByClassName`, `$('#id')` — narrowed to HTML that loads the script when possible |
+| `template-render` | code -> template | `render_template('x.html')`, `res.render('x')`, `new ModelAndView("x")`, or a string literal naming a template file |
+| `template-include` | template -> template | `{% include/extends %}`, EJS `include()`, Handlebars `{{> p}}`, Thymeleaf `th:replace`, Blade `@include` |
+| `template-call` | html/template -> code | `onclick="fn()"`, `@click`, `(click)`, `ng-click`, Flask `url_for('endpoint')` |
+| `config-reference` | code -> config | `process.env.X`, `os.getenv('X')`, `@Value("${a.b}")`, `System.getenv`, `config.get('a.b')`, `@ConfigurationProperties`. Keys are compared case-insensitively ignoring `.`, `_`, `-` (Spring-style relaxed binding) |
+| `file-reference` | code -> config/css | string literal naming a config/style file (`"settings.json"`, `"classpath:app.properties"`) |
+| `config-binding` | config -> code | `package.json` `main`/`bin`/`scripts`, fully-qualified Java class or package names in config, `node x.js` / `python app.py` commands, entry-point paths |
+
+- Function graph integration: `template-call` relationships also appear in
+  `functionGraph` as edges from the pseudo-node `<file>#<template>` to the target function.
+- **Wording constraint still applies** — these are static, heuristic links. UI text must
+  say "potentially affected", never "safe".
