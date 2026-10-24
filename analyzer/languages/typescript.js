@@ -25,6 +25,7 @@ const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
 
 const SKIP_DIRS = new Set([
   'node_modules', 'out', 'dist', 'target', '.git', '.vscode-test', 'build',
+  'coverage', '.next', '.nuxt',
 ]);
 
 // import Foo from '...'; import { a, b } from "..."; import * as x from '...';
@@ -33,6 +34,15 @@ const IMPORT_RE = /\bimport\s+(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/g;
 const EXPORT_FROM_RE = /\bexport\s+(?:[\s\S]*?\sfrom\s+)?['"]([^'"]+)['"]/g;
 // require('...') / require("...")
 const REQUIRE_RE = /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g;
+
+// Dynamic imports: import('./x'), import(`./x`), React.lazy(() => import('./x')),
+// require.resolve('./x'). Only the first argument is captured.
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(['"`])([^'"`]*?)\1/g;
+const DYNAMIC_IMPORT_TEMPLATE_RE = /\bimport\s*\(\s*`([^`]*\$\{[^`]*)`/g;
+const REQUIRE_TEMPLATE_RE = /\brequire\(\s*`([^`]*\$\{[^`]*)`/g;
+const REQUIRE_RESOLVE_RE = /\brequire\.resolve\(\s*['"]([^'"]+)['"]\s*\)/g;
+// require('./a' + name) / import('./a' + name) — static prefix before '+'
+const CONCAT_RE = /\b(?:require|import)\(\s*(['"])([^'"]+)\1\s*\+/g;
 
 // Candidate extensions/resolutions to try when resolving a relative
 // specifier like './foo' to an actual file on disk.
@@ -94,7 +104,31 @@ function parseFile(absPath) {
     }
   }
 
-  return { package: '', className, imports, rawSource: source };
+  // Dynamic references (kept separate so static `imports` is unchanged).
+  const dynamicImports = [];
+  const dynamicPatterns = []; // static prefix of a computed specifier, e.g. './locales/'
+  for (const re of [DYNAMIC_IMPORT_RE, REQUIRE_RESOLVE_RE]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(source)) !== null) {
+      const spec = m[2] !== undefined ? m[2] : m[1];
+      if (spec && !spec.includes('${')) dynamicImports.push(spec);
+    }
+  }
+  for (const re of [DYNAMIC_IMPORT_TEMPLATE_RE, REQUIRE_TEMPLATE_RE]) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(source)) !== null) {
+      dynamicPatterns.push(m[1].split('${')[0]);
+    }
+  }
+  CONCAT_RE.lastIndex = 0;
+  {
+    let m;
+    while ((m = CONCAT_RE.exec(source)) !== null) dynamicPatterns.push(m[2]);
+  }
+
+  return { package: '', className, imports, dynamicImports, dynamicPatterns, rawSource: source };
 }
 
 /**
@@ -159,6 +193,28 @@ function extractRelationships(parsedByRelPath) {
     for (const specifier of parsed.imports) {
       const target = resolveFromRelPath(relPath, specifier);
       if (target) addEdge(relPath, target, 'import');
+    }
+
+    // Dynamic imports with a literal specifier: import('./x'), require.resolve('./x').
+    // A static import of the same file wins (addEdge dedupes by from=>to).
+    for (const specifier of parsed.dynamicImports || []) {
+      const target = resolveFromRelPath(relPath, specifier);
+      if (target) addEdge(relPath, target, 'dynamic-import');
+    }
+
+    // Computed specifiers with a static directory prefix, e.g.
+    // import(`./locales/${lang}.js`) -> every file under ./locales/.
+    // Over-approximates on purpose: "potentially affected".
+    for (const prefix of parsed.dynamicPatterns || []) {
+      if (!prefix.startsWith('.')) continue;
+      const fromDir = path.posix.dirname(relPath);
+      const joined = path.posix.normalize(path.posix.join(fromDir, prefix));
+      const dirPrefix = prefix.endsWith('/') ? joined.replace(/\/?$/, '/') : joined;
+      for (const known of knownRelPaths) {
+        if (known !== relPath && known.startsWith(dirPrefix)) {
+          addEdge(relPath, known, 'dynamic-import');
+        }
+      }
     }
   }
 
