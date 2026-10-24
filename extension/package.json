@@ -1,7 +1,7 @@
 {
   "name": "kairos",
-  "displayName": "Kairos — Code Impact",
-  "description": "Understand an unfamiliar Java codebase and see the potential ripple effects of changing a file.",
+  "displayName": "Kairos \u2014 Code Impact",
+  "description": "Understand an unfamiliar codebase and see the potential ripple effects of changing a file \u2014 files, functions, and non-code relationships.",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.85.0"
@@ -9,7 +9,9 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -29,6 +31,16 @@
           "type": "boolean",
           "default": false,
           "description": "Include git co-change history (files that frequently changed alongside the selected file) as 'historical' entries in the impact view. Off by default: it costs an extra git-log walk per analysis."
+        },
+        "kairos.includeFunctions": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include the function/method call graph (who calls this function, what it calls) in the impact view. Off by default: it parses every source file's function bodies."
+        },
+        "kairos.includeCrossFile": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include non-import relationships: HTML <-> JS (ids, script tags, inline handlers), templates, stylesheets, and config files (env vars, properties/YAML keys, package.json entry points). Off by default."
         }
       }
     }
