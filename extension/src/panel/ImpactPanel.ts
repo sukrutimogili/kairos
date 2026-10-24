@@ -223,6 +223,19 @@ const STYLES = `
   .graph-edge-import { stroke: var(--edge); }
   .graph-edge-same-package-reference { stroke: #5a5a68; stroke-dasharray: 2 3; }
   .graph-edge-historical { stroke: var(--rel-historical); stroke-dasharray: 6 3; }
+  /* Phase 3: dynamic / runtime links */
+  .graph-edge-dynamic-import, .graph-edge-reflection { stroke: #b58900; stroke-dasharray: 8 3; }
+  /* Phase 3: cross-file and non-code links */
+  .graph-edge-html-script, .graph-edge-html-style, .graph-edge-html-link, .graph-edge-style-import,
+  .graph-edge-dom-reference, .graph-edge-template-render, .graph-edge-template-include,
+  .graph-edge-template-call, .graph-edge-config-reference, .graph-edge-file-reference,
+  .graph-edge-config-binding { stroke: #4aa3a3; stroke-dasharray: 3 3; }
+
+  /* Phase 3: function-level section */
+  .fn-block { border-top: 1px solid var(--border); padding: 0.75rem 0; }
+  .fn-name { font-family: var(--font-mono); font-size: 0.95rem; color: var(--accent); margin-bottom: 0.4rem; }
+  .fn-name .fn-file { color: var(--fg-muted); font-size: 0.8rem; margin-left: 0.5rem; }
+  .fn-low-confidence { color: var(--fg-muted); font-style: italic; }
   .arrow-head { fill: var(--node-stroke); }
   .arrow-head.active { fill: var(--accent); }
 
@@ -359,11 +372,76 @@ export function renderImpact(result: ImpactResponse): string {
       <div class="disclaimer-note">These are areas to review &#8212; this does not mean the change is safe.</div>
     </div>
 
+    ${renderFunctionSection(result)}
+
     <div class="section-container">
       <div class="section-label">Dependency Graph</div>
       ${renderGraph(result)}
     </div>`;
   return page('impact', body, 'impact');
+}
+
+// Phase 3: function-level view — for each function defined in the requested
+// file, who calls it and what it calls. Only rendered when the analyzer was
+// run with includeFunctions (response.functionGraph / impact.functionImpact).
+const MAX_FUNCTIONS_SHOWN = 20;
+
+export function renderFunctionSection(result: ImpactResponse): string {
+  const fnImpact = result.impact.functionImpact;
+  const fnGraph = result.functionGraph;
+  if (!fnImpact || !fnGraph) return '';
+
+  const byId = new Map(fnGraph.nodes.map((n) => [n.id, n]));
+  const mediumEdges = new Set(
+    fnGraph.edges.filter((e) => e.confidence === 'medium').map((e) => `${e.from}=>${e.to}`)
+  );
+  const label = (id: string) => {
+    const n = byId.get(id);
+    if (!n) return id;
+    const base = n.kind === 'template' ? '<template>' : `${n.className ? n.className + '.' : ''}${n.name}`;
+    return `${base} (${shortName(n.file)}:${n.startLine})`;
+  };
+  const list = (ids: string[], mk: (id: string) => string) =>
+    ids.length
+      ? `<ul class="item-list">${ids
+          .map((id) => {
+            const low = mediumEdges.has(mk(id));
+            return `<li title="${escapeHtml(id)}"><span class="bullet-accent">&#8627;</span><span class="item-name${low ? ' fn-low-confidence' : ''}">${escapeHtml(label(id))}${low ? ' ?' : ''}</span></li>`;
+          })
+          .join('')}</ul>`
+      : `<ul class="item-list"><li class="empty">None found</li></ul>`;
+
+  const shown = fnImpact.slice(0, MAX_FUNCTIONS_SHOWN);
+  const blocks = shown
+    .map((f) => {
+      const n = byId.get(f.id);
+      const title = n ? `${n.className ? n.className + '.' : ''}${n.name}` : f.id;
+      const reach = f.affected.length;
+      return `
+      <div class="fn-block">
+        <div class="fn-name">${escapeHtml(title)}<span class="fn-file">lines ${n ? n.startLine + '-' + n.endLine : '?'} &#183; ${reach} potentially affected</span></div>
+        <div class="summary-cols">
+          <div>
+            <div class="section-label">Called by (${f.callers.length})</div>
+            ${list(f.callers, (id) => `${id}=>${f.id}`)}
+          </div>
+          <div>
+            <div class="section-label">Calls (${f.callees.length})</div>
+            ${list(f.callees, (id) => `${f.id}=>${id}`)}
+          </div>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  const more = fnImpact.length > shown.length ? `<div class="disclaimer-note">Showing ${shown.length} of ${fnImpact.length} functions.</div>` : '';
+  return `
+    <div class="section-container">
+      <div class="section-label">Function Calls (${fnImpact.length} in this file)</div>
+      ${blocks || '<div class="empty-row">No functions found in this file</div>'}
+      ${more}
+      <div class="disclaimer-note">Call relationships are inferred statically; entries marked ? are lower-confidence guesses.</div>
+    </div>`;
 }
 
 // Layered layout: the target sits in the middle column; files that depend on it

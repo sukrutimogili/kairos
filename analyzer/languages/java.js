@@ -29,6 +29,10 @@ const SKIP_DIRS = new Set([
 const PACKAGE_RE = /^\s*package\s+([\w.]+)\s*;/m;
 const IMPORT_RE = /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)\s*;/gm;
 // First public (or package-private) top-level type declaration in the file.
+// Reflection / runtime class loading with a literal class name:
+//   Class.forName("com.x.Y"), classLoader.loadClass("com.x.Y"),
+//   ServiceLoader-style META-INF lookups are out of scope.
+const REFLECTION_RE = /\b(?:Class\.forName|loadClass)\(\s*"([\w.$]+)"/g;
 const TYPE_RE = /\b(?:public\s+)?(?:final\s+|abstract\s+)?(?:class|interface|enum|record)\s+(\w+)/;
 
 /**
@@ -79,7 +83,13 @@ function parseFile(absPath) {
     imports.push(m[1]);
   }
 
-  return { package: pkg, className, imports, rawSource: source };
+  const reflectiveRefs = [];
+  REFLECTION_RE.lastIndex = 0;
+  while ((m = REFLECTION_RE.exec(source)) !== null) {
+    reflectiveRefs.push(m[1]);
+  }
+
+  return { package: pkg, className, imports, reflectiveRefs, rawSource: source };
 }
 
 function escapeRegExp(str) {
@@ -125,6 +135,12 @@ function extractRelationships(parsedByRelPath) {
       if (targetRelPath) {
         addEdge(relPath, targetRelPath, 'import');
       }
+    }
+
+    // (a2) Runtime class loading by literal name — Class.forName("pkg.Foo").
+    for (const ref of parsed.reflectiveRefs || []) {
+      const targetRelPath = fqcnIndex.get(ref);
+      if (targetRelPath) addEdge(relPath, targetRelPath, 'reflection');
     }
 
     // (b) Same-package usage without an explicit import. Java doesn't

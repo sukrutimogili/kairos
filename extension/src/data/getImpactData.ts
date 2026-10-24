@@ -1,4 +1,4 @@
-import { ImpactResult } from '../types';
+import { ImpactOptions, ImpactResult } from '../types';
 import { getImpactData as getRealImpactData } from '../integration/analyzerClient';
 
 /**
@@ -9,7 +9,7 @@ import { getImpactData as getRealImpactData } from '../integration/analyzerClien
 export async function getImpactData(
   repositoryRoot: string,
   requestedFile: string,
-  options: { includeHistory?: boolean } = {}
+  options: ImpactOptions = {}
 ): Promise<ImpactResult> {
   return getRealImpactData(repositoryRoot, requestedFile, options) as ImpactResult;
 }
