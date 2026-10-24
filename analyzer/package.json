@@ -2,10 +2,10 @@
   "name": "kairos-analyzer",
   "version": "1.0.0",
   "private": true,
-  "description": "Kairos static analyzer — dependency graph + impact analysis",
+  "description": "Kairos static analyzer \u2014 dependency graph, function-level call graph, and cross-file impact analysis",
   "main": "analyze.js",
   "scripts": {
-    "test": "node analyze.test.js",
-    "test:junit": "KAIROS_JUNIT_OUT=./reports/analyzer-junit.xml node analyze.test.js"
+    "test": "node analyze.test.js && node languages/typescript.test.js && node history/gitLog.test.js && node languages/dynamic.test.js && node functions/functionGraph.test.js && node relationships/crossFile.test.js",
+    "test:junit": "KAIROS_JUNIT_OUT=./reports/analyzer-junit.xml npm test"
   }
 }
