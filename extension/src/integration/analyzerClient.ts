@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { ImpactOptions } from '../types';
 
 // Leela's analyzer lives at repoRoot/analyzer/analyze.js — plain CommonJS,
 // outside this extension's TS project and outside rootDir, so it's loaded
@@ -25,11 +26,15 @@ export const ANALYZER_ENTRY = path.resolve(__dirname, '../../../analyzer/analyze
  *   straight through to analyze()'s own includeHistory option (default
  *   false), which is itself forwarded straight through to
  *   computeCoChangeScores() — no logic duplicated at this layer.
+ * @param options.includeFunctions - Phase 3: adds functionGraph +
+ *   impact.functionImpact (function/method call graph).
+ * @param options.includeCrossFile - Phase 3: adds HTML/template/CSS/config
+ *   nodes and their non-import relationships to the graph.
  */
 export function getImpactData(
   repositoryRoot: string,
   requestedFile: string,
-  options: { includeHistory?: boolean } = {}
+  options: ImpactOptions = {}
 ) {
   return analyze(repositoryRoot, requestedFile, options);
 }
